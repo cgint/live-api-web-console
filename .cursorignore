@@ -28,6 +28,10 @@ build/
 *.swo
 .DS_Store
 
+# Spring Application Properties
+application*.properties
+application*.yml
+
 # Test output files
 test-logs/
 test-results/

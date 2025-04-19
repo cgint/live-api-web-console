@@ -72,7 +72,7 @@ function ControlTray({
   const renderCanvasRef = useRef<HTMLCanvasElement>(null);
   const connectButtonRef = useRef<HTMLButtonElement>(null);
 
-  const { client, connected, connect, disconnect, volume } =
+  const { client, connected, connect, disconnect, volume, userApiKey } =
     useLiveAPIContext();
 
   useEffect(() => {
@@ -202,6 +202,7 @@ function ControlTray({
             ref={connectButtonRef}
             className={cn("action-button connect-toggle", { connected })}
             onClick={connected ? disconnect : connect}
+            disabled={!userApiKey || userApiKey.trim() === ''}
           >
             <span className="material-symbols-outlined filled">
               {connected ? "pause" : "play_arrow"}

@@ -152,6 +152,43 @@
     }
   }
 
+  .api-key-section {
+    padding: 0 25px 15px 25px;
+    
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--Neutral-90, #e1e2e3);
+      font-size: 14px;
+    }
+    
+    input {
+      width: 100%;
+      height: 35px;
+      padding: 0 10px;
+      border-radius: 4px;
+      border: 1px solid var(--Neutral-20, #2a2f31);
+      background: var(--Neutral-10, #1c1f21);
+      color: var(--Neutral-90, #e1e2e3);
+      font-family: "Space Mono";
+      font-size: 14px;
+      
+      &::placeholder {
+        color: var(--Neutral-40, #616466);
+      }
+      
+      &:focus {
+        outline: none;
+        border-color: var(--Neutral-30);
+      }
+      
+      &:disabled {
+        opacity: 0.7;
+        cursor: not-allowed;
+      }
+    }
+  }
+
   .side-panel-container {
     align-self: flex-end;
     width: 400px;

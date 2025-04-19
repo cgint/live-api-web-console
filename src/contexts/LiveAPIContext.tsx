@@ -14,26 +14,34 @@
  * limitations under the License.
  */
 
-import { createContext, FC, ReactNode, useContext } from "react";
+import { createContext, FC, ReactNode, useContext, useState } from "react";
 import { useLiveAPI, UseLiveAPIResults } from "../hooks/use-live-api";
 
-const LiveAPIContext = createContext<UseLiveAPIResults | undefined>(undefined);
+const LiveAPIContext = createContext<UseLiveAPIResults & {
+  userApiKey: string;
+  setUserApiKey: React.Dispatch<React.SetStateAction<string>>;
+} | undefined>(undefined);
 
 export type LiveAPIProviderProps = {
   children: ReactNode;
   url?: string;
-  apiKey: string;
 };
 
 export const LiveAPIProvider: FC<LiveAPIProviderProps> = ({
   url,
-  apiKey,
   children,
 }) => {
-  const liveAPI = useLiveAPI({ url, apiKey });
+  const [userApiKey, setUserApiKey] = useState<string>('');
+  const liveAPI = useLiveAPI({ url, apiKey: userApiKey });
+
+  const contextValue = {
+    ...liveAPI,
+    userApiKey,
+    setUserApiKey,
+  };
 
   return (
-    <LiveAPIContext.Provider value={liveAPI}>
+    <LiveAPIContext.Provider value={contextValue}>
       {children}
     </LiveAPIContext.Provider>
   );

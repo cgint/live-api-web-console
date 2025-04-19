@@ -30,7 +30,7 @@ const filterOptions = [
 ];
 
 export default function SidePanel() {
-  const { connected, client } = useLiveAPIContext();
+  const { connected, client, userApiKey, setUserApiKey } = useLiveAPIContext();
   const [open, setOpen] = useState(true);
   const loggerRef = useRef<HTMLDivElement>(null);
   const loggerLastHeightRef = useRef<number>(-1);
@@ -70,6 +70,10 @@ export default function SidePanel() {
     if (inputRef.current) {
       inputRef.current.innerText = "";
     }
+  };
+
+  const handleApiKeyChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setUserApiKey(event.target.value);
   };
 
   return (
@@ -120,6 +124,17 @@ export default function SidePanel() {
             : `⏸️${open ? " Paused" : ""}`}
         </div>
       </section>
+      <div className={cn("api-key-section", { hidden: !open })}>
+        <label htmlFor="apiKeyInput">Gemini API Key:</label>
+        <input
+          id="apiKeyInput"
+          type="password"
+          value={userApiKey}
+          onChange={handleApiKeyChange}
+          placeholder="Enter your Gemini API Key"
+          disabled={connected}
+        />
+      </div>
       <div className="side-panel-container" ref={loggerRef}>
         <Logger
           filter={(selectedOption?.value as LoggerFilterType) || "none"}
