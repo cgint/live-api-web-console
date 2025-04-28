@@ -44,12 +44,48 @@
       border: 1px solid var(--Blue-500);
     }
   }
+  
+  &.connecting {
+    background: var(--Neutral-30);
+    color: var(--Neutral-90);
+    
+    span {
+      animation: rotating 2s linear infinite;
+    }
+    
+    &:hover {
+      border: 1px solid var(--Neutral-50);
+    }
+    
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.8;
+    }
+  }
+  
+  &.error {
+    background: var(--Red-700);
+    color: var(--Red-400);
+    
+    &:hover {
+      border: 1px solid var(--Red-400);
+    }
+  }
 }
 
 @property --volume {
   syntax: "length";
   inherit: false;
   initial-value: 0px;
+}
+
+@keyframes rotating {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .disabled .mic-button,
@@ -89,6 +125,17 @@
     border-radius: 24px;
     transition: all 0.02s ease-in-out;
   }
+  
+  &:disabled {
+    background-color: var(--Neutral-30);
+    color: var(--Neutral-50);
+    cursor: not-allowed;
+    opacity: 0.8;
+    
+    &:before {
+      display: none;
+    }
+  }
 }
 
 .connect-toggle {
@@ -100,6 +147,11 @@
   &:not(.connected) {
     background-color: var(--Blue-500);
     color: var(--Neutral-5);
+  }
+  
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.8;
   }
 }
 
@@ -139,6 +191,45 @@
       font-size: 11px;
       color: var(--Blue-500);
       user-select: none;
+    }
+    
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      user-select: none;
+      white-space: nowrap;
+      max-width: 130px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      
+      .material-symbols-outlined {
+        font-size: 16px;
+      }
+      
+      &.status-connected {
+        color: var(--Green-500);
+      }
+      
+      &.status-connecting,
+      &.status-reconnecting {
+        color: var(--Blue-500);
+        
+        .material-symbols-outlined {
+          animation: rotating 2s linear infinite;
+        }
+      }
+      
+      &.status-disconnected {
+        color: var(--Neutral-60);
+      }
+      
+      &.status-error {
+        color: var(--Red-500);
+      }
     }
 
     &:not(.connected) {

@@ -40,12 +40,47 @@ import {
 import { blobToJSON, base64ToArrayBuffer } from "./utils";
 
 /**
+ * Additional special message types that aren't in the standard types
+ */
+interface GoAwayMessage {
+  goAway: {
+    timeLeft: number;
+  };
+}
+
+interface SessionResumptionUpdateMessage {
+  sessionResumptionUpdate: {
+    resumable: boolean;
+    newHandle: string;
+  };
+}
+
+// Type guard functions
+function isGoAwayMessage(obj: any): obj is GoAwayMessage {
+  return obj && 
+         typeof obj === 'object' &&
+         obj.goAway && 
+         typeof obj.goAway === 'object' &&
+         typeof obj.goAway.timeLeft === 'number';
+}
+
+function isSessionResumptionUpdateMessage(obj: any): obj is SessionResumptionUpdateMessage {
+  return obj && 
+         typeof obj === 'object' &&
+         obj.sessionResumptionUpdate && 
+         typeof obj.sessionResumptionUpdate === 'object' &&
+         typeof obj.sessionResumptionUpdate.resumable === 'boolean' &&
+         typeof obj.sessionResumptionUpdate.newHandle === 'string';
+}
+
+/**
  * the events that this client will emit
  */
 interface MultimodalLiveClientEventTypes {
   open: () => void;
   log: (log: StreamingLog) => void;
   close: (event: CloseEvent) => void;
+  error: (event: Event) => void;
   audio: (data: ArrayBuffer) => void;
   content: (data: ServerContent) => void;
   interrupted: () => void;
@@ -53,11 +88,12 @@ interface MultimodalLiveClientEventTypes {
   turncomplete: () => void;
   toolcall: (toolCall: ToolCall) => void;
   toolcallcancellation: (toolcallCancellation: ToolCallCancellation) => void;
+  goAway: (timeLeft: number) => void;
+  sessionUpdate: (handle: string) => void;
 }
 
 export type MultimodalLiveAPIClientConnection = {
-  url?: string;
-  apiKey: string;
+  proxyUrl: string; // URL of YOUR backend proxy server
 };
 
 /**
@@ -68,18 +104,18 @@ export type MultimodalLiveAPIClientConnection = {
 export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEventTypes> {
   public ws: WebSocket | null = null;
   protected config: LiveConfig | null = null;
-  public url: string = "";
+  public proxyUrl: string = "";
+  
   public getConfig() {
     return { ...this.config };
   }
 
-  constructor({ url, apiKey }: MultimodalLiveAPIClientConnection) {
+  constructor({ proxyUrl }: MultimodalLiveAPIClientConnection) {
     super();
-    url =
-      url ||
-      `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent`;
-    url += `?key=${apiKey}`;
-    this.url = url;
+    if (!proxyUrl) {
+      throw new Error("Proxy URL must be provided to MultimodalLiveClient");
+    }
+    this.proxyUrl = proxyUrl;
     this.send = this.send.bind(this);
   }
 
@@ -95,57 +131,83 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
   connect(config: LiveConfig): Promise<boolean> {
     this.config = config;
 
-    const ws = new WebSocket(this.url);
+    // Connect to YOUR proxy server URL
+    const ws = new WebSocket(this.proxyUrl);
+    
+    ws.addEventListener("error", (event: Event) => {
+      this.emit("error", event);
+    });
 
     ws.addEventListener("message", async (evt: MessageEvent) => {
       if (evt.data instanceof Blob) {
         this.receive(evt.data);
+      } else if (typeof evt.data === 'string') {
+        // Handle potential text messages from proxy (e.g., errors)
+        console.warn("Received text message from proxy:", evt.data);
+        // Potentially parse if expecting JSON errors, etc.
+        try {
+            const data = JSON.parse(evt.data);
+            // Handle parsed data if necessary
+            
+            // Check for session-related messages
+            if (isSessionResumptionUpdateMessage(data)) {
+              this.emit("sessionUpdate", data.sessionResumptionUpdate.newHandle);
+            }
+            
+            // Check for GoAway messages
+            if (isGoAwayMessage(data)) {
+              this.emit("goAway", data.goAway.timeLeft);
+            }
+        } catch (e) {
+            // Ignore if not JSON or handle as plain text
+        }
       } else {
-        console.log("non blob message", evt);
+        console.log("Received non-blob/non-string message:", evt);
       }
     });
+    
     return new Promise((resolve, reject) => {
       const onError = (ev: Event) => {
         this.disconnect(ws);
-        const message = `Could not connect to "${this.url}"`;
-        this.log(`server.${ev.type}`, message);
+        // Update error message to reflect proxy connection failure
+        const message = `Could not connect to proxy server at "${this.proxyUrl}"`;
+        this.log(`proxy.${ev.type}`, message); // Log as proxy error
         reject(new Error(message));
       };
       ws.addEventListener("error", onError);
       ws.addEventListener("open", (ev: Event) => {
         if (!this.config) {
-          reject("Invalid config sent to `connect(config)`");
+          reject("Invalid config provided to 'connect(config)'");
           return;
         }
-        this.log(`client.${ev.type}`, `connected to socket`);
+        this.log(`proxy.${ev.type}`, `connected to proxy socket`); // Log proxy connection
         this.emit("open");
 
         this.ws = ws;
 
+        // Send the setup message THROUGH the proxy
         const setupMessage: SetupMessage = {
           setup: this.config,
         };
         this._sendDirect(setupMessage);
-        this.log("client.send", "setup");
+        this.log("client.send->proxy", "setup"); // Log direction
 
         ws.removeEventListener("error", onError);
         ws.addEventListener("close", (ev: CloseEvent) => {
-          console.log(ev);
-          this.disconnect(ws);
           let reason = ev.reason || "";
-          if (reason.toLowerCase().includes("error")) {
-            const prelude = "ERROR]";
-            const preludeIndex = reason.indexOf(prelude);
-            if (preludeIndex > 0) {
-              reason = reason.slice(
-                preludeIndex + prelude.length + 1,
-                Infinity,
-              );
-            }
+          const wasClean = ev.wasClean;
+          const code = ev.code;
+          
+          // Check for specific close codes from the proxy
+          if (code === 1011) { // Example: Internal Server Error from proxy
+              reason = `Proxy Error: ${reason}`;
+              // Potentially show a user-facing error indicating a server problem
           }
+
+          this.disconnect(ws);
           this.log(
-            `server.${ev.type}`,
-            `disconnected ${reason ? `with reason: ${reason}` : ``}`,
+            `proxy.${ev.type}`,
+            `disconnected from proxy ${reason ? `with reason: ${reason}` : ``} (Code: ${code}, Clean: ${wasClean})`,
           );
           this.emit("close", ev);
         });
@@ -158,9 +220,19 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
     // could be that this is an old websocket and theres already a new instance
     // only close it if its still the correct reference
     if ((!ws || this.ws === ws) && this.ws) {
-      this.ws.close();
+      // Send a disconnect message to the server before closing
+      try {
+        if (this.ws.readyState === WebSocket.OPEN) {
+          this._sendDirect({ type: 'disconnect' });
+          this.log("client.disconnect", "Sent disconnect message to server");
+        }
+      } catch (e) {
+        console.error("Error sending disconnect message:", e);
+      }
+      
+      this.ws.close(1000, "Client initiated disconnect");
       this.ws = null;
-      this.log("client.close", `Disconnected`);
+      this.log("client.close", `Disconnected from proxy`);
       return true;
     }
     return false;
@@ -185,6 +257,28 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
       this.log("server.send", "setupComplete");
       this.emit("setupcomplete");
       return;
+    }
+
+    // Look for special message types
+    try {
+      // We need to cast the result to any since we're checking for message types
+      // that aren't part of the standard LiveIncomingMessage type
+      const responseObj: any = await blobToJSON(blob);
+      
+      if (isGoAwayMessage(responseObj)) {
+        this.log("server.goAway", `timeLeft: ${responseObj.goAway.timeLeft}ms`);
+        this.emit("goAway", responseObj.goAway.timeLeft);
+        return;
+      }
+      
+      if (isSessionResumptionUpdateMessage(responseObj)) {
+        this.log("server.sessionUpdate", 
+          `Handle: ${responseObj.sessionResumptionUpdate.newHandle}`);
+        this.emit("sessionUpdate", responseObj.sessionResumptionUpdate.newHandle);
+        return;
+      }
+    } catch (e) {
+      // Ignore parsing errors and continue with normal message handling
     }
 
     // this json also might be `contentUpdate { interrupted: true }`
@@ -270,7 +364,7 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
       },
     };
     this._sendDirect(data);
-    this.log(`client.realtimeInput`, message);
+    this.log(`client.realtimeInput->proxy`, message);
   }
 
   /**
@@ -282,7 +376,7 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
     };
 
     this._sendDirect(message);
-    this.log(`client.toolResponse`, message);
+    this.log(`client.toolResponse->proxy`, message);
   }
 
   /**
@@ -303,7 +397,7 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
     };
 
     this._sendDirect(clientContentRequest);
-    this.log(`client.send`, clientContentRequest);
+    this.log(`client.send->proxy`, clientContentRequest);
   }
 
   /**
@@ -312,9 +406,15 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
    */
   _sendDirect(request: object) {
     if (!this.ws) {
-      throw new Error("WebSocket is not connected");
+      console.error("WebSocket (proxy) is not connected, cannot send message.");
+      return; // Prevent sending if not connected
     }
-    const str = JSON.stringify(request);
-    this.ws.send(str);
+    
+    try {
+      const str = JSON.stringify(request);
+      this.ws.send(str);
+    } catch (error) {
+      console.error("Failed to stringify or send message:", error, request);
+    }
   }
 }

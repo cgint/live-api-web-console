@@ -56,6 +56,48 @@ const MediaStreamButton = memo(
     ),
 );
 
+// Status indicators for different connection states
+const ConnectionStatusIndicator = ({ state, error }: { state: string, error: string | null }) => {
+  let statusIcon = "info";
+  let statusClass = "";
+  let statusMessage = state;
+
+  switch (state) {
+    case "connected":
+      statusIcon = "check_circle";
+      statusClass = "status-connected";
+      statusMessage = "Connected";
+      break;
+    case "connecting": 
+      statusIcon = "sync";
+      statusClass = "status-connecting";
+      statusMessage = "Connecting...";
+      break;
+    case "reconnecting":
+      statusIcon = "sync";
+      statusClass = "status-reconnecting";
+      statusMessage = "Reconnecting...";
+      break;
+    case "disconnected":
+      statusIcon = "radio_button_unchecked";
+      statusClass = "status-disconnected";
+      statusMessage = "Disconnected";
+      break;
+    case "error":
+      statusIcon = "error";
+      statusClass = "status-error";
+      statusMessage = error || "Error";
+      break;
+  }
+
+  return (
+    <div className={`connection-status ${statusClass}`}>
+      <span className="material-symbols-outlined">{statusIcon}</span>
+      <span className="status-text">{statusMessage}</span>
+    </div>
+  );
+};
+
 function ControlTray({
   videoRef,
   children,
@@ -72,7 +114,7 @@ function ControlTray({
   const renderCanvasRef = useRef<HTMLCanvasElement>(null);
   const connectButtonRef = useRef<HTMLButtonElement>(null);
 
-  const { client, connected, connect, disconnect, volume, userApiKey } =
+  const { client, connected, connect, disconnect, volume, connectionState, error } =
     useLiveAPIContext();
 
   useEffect(() => {
@@ -156,13 +198,24 @@ function ControlTray({
     videoStreams.filter((msr) => msr !== next).forEach((msr) => msr.stop());
   };
 
+  // Determine if control buttons should be disabled
+  const controlsDisabled = !connected || connectionState === "connecting" || connectionState === "reconnecting";
+
+  // Get the appropriate connect button text and state
+  const getConnectButtonLabel = () => {
+    if (connected) return "pause";
+    if (connectionState === "connecting" || connectionState === "reconnecting") return "pending";
+    return "play_arrow";
+  };
+
   return (
     <section className="control-tray">
       <canvas style={{ display: "none" }} ref={renderCanvasRef} />
-      <nav className={cn("actions-nav", { disabled: !connected })}>
+      <nav className={cn("actions-nav", { disabled: controlsDisabled })}>
         <button
           className={cn("action-button mic-button")}
           onClick={() => setMuted(!muted)}
+          disabled={controlsDisabled}
         >
           {!muted ? (
             <span className="material-symbols-outlined filled">mic</span>
@@ -200,16 +253,20 @@ function ControlTray({
         <div className="connection-button-container">
           <button
             ref={connectButtonRef}
-            className={cn("action-button connect-toggle", { connected })}
+            className={cn("action-button connect-toggle", { 
+              connected, 
+              connecting: connectionState === "connecting" || connectionState === "reconnecting",
+              error: connectionState === "error"
+            })}
             onClick={connected ? disconnect : connect}
-            disabled={!userApiKey || userApiKey.trim() === ''}
+            disabled={connectionState === "connecting" || connectionState === "reconnecting"}
           >
             <span className="material-symbols-outlined filled">
-              {connected ? "pause" : "play_arrow"}
+              {getConnectButtonLabel()}
             </span>
           </button>
         </div>
-        <span className="text-indicator">Streaming</span>
+        <ConnectionStatusIndicator state={connectionState} error={error} />
       </div>
     </section>
   );

@@ -22,8 +22,9 @@ import { Altair } from "./components/altair/Altair";
 import ControlTray from "./components/control-tray/ControlTray";
 import cn from "classnames";
 
-const host = "generativelanguage.googleapis.com";
-const uri = `wss://${host}/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent`;
+// Determine the proxy URL (use environment variables for flexibility)
+// For local dev, you might run proxy on 8080. For prod, use wss://your-domain.com
+const proxyUrl = process.env.REACT_APP_PROXY_URL || "ws://localhost:8080"; // Default for local dev
 
 function App() {
   // this video reference is used for displaying the active stream, whether that is the webcam or screen capture
@@ -34,7 +35,7 @@ function App() {
 
   return (
     <div className="App">
-      <LiveAPIProvider url={uri}>
+      <LiveAPIProvider proxyUrl={proxyUrl}>
         <div className="streaming-console">
           <SidePanel />
           <main>

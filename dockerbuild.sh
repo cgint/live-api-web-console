@@ -22,5 +22,5 @@ if [ "$1" = "push" ]; then
     docker push "$IMAGE_NAME:$TAG"
 elif [ "$1" = "run" ]; then
     echo "Running Docker container..."
-    docker run -p 3000:3000 "$IMAGE_NAME:$TAG"
+    docker run --rm -it --init -p 3000:3000 "$IMAGE_NAME:$TAG"
 fi

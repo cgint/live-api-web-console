@@ -42,4 +42,4 @@ playwright-report/
 .aider*
 .env
 *.env.yaml
-*_codegiant_*
+# *_codegiant_*

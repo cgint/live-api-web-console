@@ -14,31 +14,28 @@
  * limitations under the License.
  */
 
-import { createContext, FC, ReactNode, useContext, useState } from "react";
+import { createContext, FC, ReactNode, useContext, useMemo } from "react";
 import { useLiveAPI, UseLiveAPIResults } from "../hooks/use-live-api";
 
-const LiveAPIContext = createContext<UseLiveAPIResults & {
-  userApiKey: string;
-  setUserApiKey: React.Dispatch<React.SetStateAction<string>>;
-} | undefined>(undefined);
+// Define the shape of the context, removing API key specifics
+const LiveAPIContext = createContext<UseLiveAPIResults | undefined>(undefined);
 
 export type LiveAPIProviderProps = {
   children: ReactNode;
-  url?: string;
+  proxyUrl: string; // Expect the proxy URL prop
 };
 
 export const LiveAPIProvider: FC<LiveAPIProviderProps> = ({
-  url,
+  proxyUrl, // Use the proxyUrl prop
   children,
 }) => {
-  const [userApiKey, setUserApiKey] = useState<string>('');
-  const liveAPI = useLiveAPI({ url, apiKey: userApiKey });
+  // Pass proxyUrl to the hook
+  const liveAPI = useLiveAPI({ proxyUrl });
 
-  const contextValue = {
+  // The context value now just contains the results from useLiveAPI
+  const contextValue = useMemo(() => ({
     ...liveAPI,
-    userApiKey,
-    setUserApiKey,
-  };
+  }), [liveAPI]); // Memoize based on liveAPI results
 
   return (
     <LiveAPIContext.Provider value={contextValue}>
@@ -50,7 +47,7 @@ export const LiveAPIProvider: FC<LiveAPIProviderProps> = ({
 export const useLiveAPIContext = () => {
   const context = useContext(LiveAPIContext);
   if (!context) {
-    throw new Error("useLiveAPIContext must be used wihin a LiveAPIProvider");
+    throw new Error("useLiveAPIContext must be used within a LiveAPIProvider");
   }
   return context;
 };

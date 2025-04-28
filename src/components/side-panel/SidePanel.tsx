@@ -30,7 +30,7 @@ const filterOptions = [
 ];
 
 export default function SidePanel() {
-  const { connected, client, userApiKey, setUserApiKey } = useLiveAPIContext();
+  const { connected, client } = useLiveAPIContext();
   const [open, setOpen] = useState(true);
   const loggerRef = useRef<HTMLDivElement>(null);
   const loggerLastHeightRef = useRef<number>(-1);
@@ -64,16 +64,18 @@ export default function SidePanel() {
   }, [client, log]);
 
   const handleSubmit = () => {
+    if (!connected) {
+      console.warn("Cannot send message: Not connected.");
+      return;
+    }
+    if (!textInput.trim()) {
+      return; // Don't send empty messages
+    }
     client.send([{ text: textInput }]);
-
     setTextInput("");
     if (inputRef.current) {
-      inputRef.current.innerText = "";
+      inputRef.current.value = "";
     }
-  };
-
-  const handleApiKeyChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setUserApiKey(event.target.value);
   };
 
   return (
@@ -124,17 +126,6 @@ export default function SidePanel() {
             : `⏸️${open ? " Paused" : ""}`}
         </div>
       </section>
-      <div className={cn("api-key-section", { hidden: !open })}>
-        <label htmlFor="apiKeyInput">Gemini API Key:</label>
-        <input
-          id="apiKeyInput"
-          type="password"
-          value={userApiKey}
-          onChange={handleApiKeyChange}
-          placeholder="Enter your Gemini API Key"
-          disabled={connected}
-        />
-      </div>
       <div className="side-panel-container" ref={loggerRef}>
         <Logger
           filter={(selectedOption?.value as LoggerFilterType) || "none"}
@@ -154,18 +145,20 @@ export default function SidePanel() {
             }}
             onChange={(e) => setTextInput(e.target.value)}
             value={textInput}
+            disabled={!connected} // Disable textarea if not connected
           ></textarea>
           <span
             className={cn("input-content-placeholder", {
               hidden: textInput.length,
             })}
           >
-            Type&nbsp;something...
+            {connected ? "Type something..." : "Connect to send messages"}
           </span>
 
           <button
             className="send-button material-symbols-outlined filled"
             onClick={handleSubmit}
+            disabled={!connected || !textInput.trim()} // Disable send if not connected or no text
           >
             send
           </button>
