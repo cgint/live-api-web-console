@@ -832,19 +832,19 @@ class EventEmitter {
       this.isConnected = false;
       this.isStreaming = false; // Tracks if recorder is active
   
-      // Tool definition (from Altair example)
-      this.renderAltairTool = {
-          name: "render_altair",
-          description: "Displays an altair graph in json format.",
+      // Tool definition for showing an alert
+      this.showAlertTool = {
+          name: "show_alert",
+          description: "Displays a message in a browser alert box.",
           parameters: {
-              type: "OBJECT", // Note: Use string values for SchemaType enums in plain JS
+              type: "OBJECT", 
               properties: {
-              json_graph: {
+              text: {
                   type: "STRING",
-                  description: "JSON STRING representation of the graph to render. Must be a string, not a json object",
+                  description: "The text message to display in the alert.",
               },
               },
-              required: ["json_graph"],
+              required: ["text"],
           },
       };
   
@@ -857,11 +857,11 @@ class EventEmitter {
               },
           },
           systemInstruction: {
-              parts: [{ text: 'You are my helpful assistant. Any time I ask you for a graph call the "render_altair" function I have provided you. Dont ask for additional information just make your best judgement.' }],
+              parts: [{ text: 'You are my helpful assistant. When asked to show a message, use the "show_alert" function I have provided you.' }],
           },
           tools: [
               // { googleSearch: {} }, // Optional: requires billing enabled
-              { functionDeclarations: [this.renderAltairTool] }
+              { functionDeclarations: [this.showAlertTool] }
           ],
       };
   
@@ -998,21 +998,41 @@ class EventEmitter {
           console.log("Received Tool Call:", toolCall);
           this._updateStatus("Tool call received...");
   
-          const altairCall = toolCall.functionCalls.find(fc => fc.name === this.renderAltairTool.name);
+          const showAlertCall = toolCall.functionCalls.find(fc => fc.name === this.showAlertTool.name);
   
-          if (altairCall) {
-              console.log("Altair Tool Call Args:", altairCall.args);
-              // TODO: Process the altairCall.args.json_graph if needed            // For now, just send a success response immediately
-  
-              const response = {
-                  functionResponses: [{                    id: altairCall.id,
-                      response: { output: { success: true, message: "Graph processed client-side." } } // Simple success object
-                  }]
-              };
-              setTimeout(() => { // Add slight delay
-                  this.client.sendToolResponse(response.functionResponses);
-                  this._updateStatus("Sent tool response.");
-              }, 200);
+          if (showAlertCall && showAlertCall.args && typeof showAlertCall.args.text === 'string') {
+              console.log("Show Alert Tool Call Args:", showAlertCall.args);
+              
+              try {
+                  // Display the alert with the text from the tool call
+                  alert(`Message from Assistant:\n\n${showAlertCall.args.text}`);
+                  
+                  const response = {
+                      functionResponses: [{
+                          id: showAlertCall.id,
+                          response: { output: { success: true, message: "Alert displayed client-side." } }
+                      }]
+                  };
+                  
+                  setTimeout(() => { // Add slight delay
+                      this.client.sendToolResponse(response.functionResponses);
+                      this._updateStatus("Sent alert tool response.");
+                  }, 200);
+              } catch (e) {
+                  console.error("Error displaying alert:", e);
+                  // Send an error response if alert fails
+                  const response = {
+                      functionResponses: [{
+                          id: showAlertCall.id,
+                          response: { output: { success: false, message: `Failed to display alert: ${e.message}` } }
+                      }]
+                  };
+                  
+                  setTimeout(() => {
+                      this.client.sendToolResponse(response.functionResponses);
+                      this._updateStatus("Sent error response for alert tool.");
+                  }, 200);
+              }
           } else {
               // Handle other potential tool calls or send generic responses if needed
               const responses = toolCall.functionCalls.map(fc => ({
@@ -1022,7 +1042,8 @@ class EventEmitter {
                if(responses.length > 0) {
                   setTimeout(() => {
                       this.client.sendToolResponse(responses);
-                      this._updateStatus("Sent default tool response(s).");                }, 200);
+                      this._updateStatus("Sent default tool response(s).");
+                  }, 200);
               }
           }
       });
