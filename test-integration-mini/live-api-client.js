@@ -105,7 +105,8 @@ class EventEmitter {
   
     processChunk(float32Array) {
       const l = float32Array.length;
-      for (let i = 0; i < l; i++) {      const int16Value = Math.max(-32768, Math.min(32767, float32Array[i] * 32768));
+      for (let i = 0; i < l; i++) {      
+      const int16Value = Math.max(-32768, Math.min(32767, float32Array[i] * 32768));
         this.buffer[this.bufferWriteIndex++] = int16Value;
         if(this.bufferWriteIndex >= this.buffer.length) {
           this.sendAndClearBuffer();
@@ -820,11 +821,11 @@ class EventEmitter {
   
   // --- Main Controller ---
   class LiveApiClientController {
-    constructor(apiKeyInputId, startBtnId, stopBtnId, statusElId) {    this.apiKeyInput = document.getElementById(apiKeyInputId);
+    constructor(apiKeyInputId, startBtnId, stopBtnId, statusElId, options = {}) {
+      this.apiKeyInput = document.getElementById(apiKeyInputId);
       this.startBtn = document.getElementById(startBtnId);
       this.stopBtn = document.getElementById(stopBtnId);
       this.statusEl = document.getElementById(statusElId);
-  
       this.apiKey = "";
       this.client = null;
       this.recorder = null;
@@ -832,43 +833,51 @@ class EventEmitter {
       this.isConnected = false;
       this.isStreaming = false; // Tracks if recorder is active
   
-      // Tool definition for showing an alert
-      this.showAlertTool = {
-          name: "show_alert",
-          description: "Displays a message in a browser alert box.",
-          parameters: {
-              type: "OBJECT", 
-              properties: {
-              text: {
-                  type: "STRING",
-                  description: "The text message to display in the alert.",
-              },
-              },
-              required: ["text"],
+      // Extract options with defaults
+      const {
+        tools = [],
+        toolHandlers = {},
+        globalToolHandler = null,
+        model = "models/gemini-2.0-flash-live-001",
+        systemInstructionText = 'You are my helpful assistant.',
+        initialMessageToAI = 'Hello. Pls start with "Hi, how can I help you today?"',
+        generationConfig = {
+          responseModalities: "audio",
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } },
           },
+        }
+      } = options;
+  
+      // Store tool definitions and handlers
+      this.tools = tools;
+      this.toolHandlers = toolHandlers;
+      this.globalToolHandler = globalToolHandler;
+      this.initialMessageToAI = initialMessageToAI;
+  
+      // Build config object for the API
+      this.config = {
+        model: model,
+        generationConfig: generationConfig,
+        systemInstruction: {
+          parts: [{ text: systemInstructionText }],
+        },
+        tools: [
+          // Format tool declarations properly
+          { functionDeclarations: this.tools }
+        ],
       };
   
-      this.config = {
-          model: "models/gemini-2.0-flash-live-001", // Updated to latest model version
-          generationConfig: {
-              responseModalities: "audio", // Request audio output
-              speechConfig: {
-                  voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } },
-              },
-          },
-          systemInstruction: {
-              parts: [{ text: 'You are my helpful assistant. When asked to show a message, use the "show_alert" function I have provided you.' }],
-          },
-          tools: [
-              // { googleSearch: {} }, // Optional: requires billing enabled
-              { functionDeclarations: [this.showAlertTool] }
-          ],
-      };
+      // Remove empty tools property if no tools defined
+      if (!this.tools.length) {
+        delete this.config.tools;
+      }
   
       this._bindEvents();
     }
   
-    _bindEvents() {    this.startBtn.onclick = () => this.start();
+    _bindEvents() {
+      this.startBtn.onclick = () => this.start();
       this.stopBtn.onclick = () => this.stop();
     }
   
@@ -881,13 +890,15 @@ class EventEmitter {
     _updateControls() {
       this.startBtn.disabled = this.isConnected;
       this.stopBtn.disabled = !this.isConnected;
-      this.apiKeyInput.disabled = this.isConnected;  }
+      this.apiKeyInput.disabled = this.isConnected;
+    }
   
     async start() {
       this.apiKey = this.apiKeyInput.value.trim();
       if (!this.apiKey) {
         this._updateStatus("API Key is required.", true);
-        return;    }
+        return;
+      }
       this._updateStatus("Starting...");
       this.startBtn.disabled = true; // Disable start button immediately
   
@@ -915,8 +926,14 @@ class EventEmitter {
         await this.client.connect(this.config);
         this._updateStatus("Connected and streaming.");
         this._updateControls();
+
+        // Send initial message to AI
+        if (this.initialMessageToAI) {
+          this.client.sendText(this.initialMessageToAI);
+        }
   
-      } catch (error) {      this._updateStatus(`Failed to start: ${error.message}`, true);
+      } catch (error) {
+        this._updateStatus(`Failed to start: ${error.message}`, true);
         this.stop(); // Ensure cleanup on failure
       }
     }
@@ -933,132 +950,143 @@ class EventEmitter {
       if (this.client) {
         this.client.disconnect();
       }
-      // Client's onClose handler will set isConnected = false and update controls
-      // Resetting state here can cause race conditions if close event hasn't fired
-      // this.isConnected = false;
-      // this._updateControls();    this._updateStatus("Stopped.");
+      this._updateStatus("Stopped.");
     }
   
     _setupClientListeners() {
       this.client.on("log", (logEntry) => {
         // Optional: More detailed logging if needed
-        // console.log(`[LOG] ${logEntry.type}:`, logEntry.message);
       });
   
       this.client.on("open", () => {
         this.isConnected = true;
         this._updateStatus("Connected and streaming.");
         this._updateControls();
-        // Recorder start is now handled in the start() method after connect succeeds
-      });    this.client.on("close", (event) => {
+      });
+  
+      this.client.on("close", (event) => {
         this.isConnected = false;
-         if (this.isStreaming) { // Stop recorder if it was running
-              if (this.recorder) this.recorder.stop();            this.isStreaming = false;
-          }
+        if (this.isStreaming) {
+          if (this.recorder) this.recorder.stop();
+          this.isStreaming = false;
+        }
         this._updateStatus(`Disconnected. Code: ${event.code}`, event.code !== 1000);
         this._updateControls();
-         // Attempt cleanup of audio contexts if they exist
-         if (this.recorder && this.recorder.audioContext && this.recorder.audioContext.state !== 'closed') {
-             this.recorder.audioContext.close().catch(e => console.warn("Error closing recorder context:", e));
-             this.recorder.audioContext = null;
-         }
-         if (this.streamer && this.streamer.audioContext && this.streamer.audioContext.state !== 'closed') {
-             // Check if it's the same context as the recorder
-             if (!this.recorder || this.streamer.audioContext !== this.recorder.audioContext) {
-                 this.streamer.audioContext.close().catch(e => console.warn("Error closing streamer context:", e));
-             }
-             this.streamer.audioContext = null;
-         }
+        
+        // Cleanup audio contexts
+        if (this.recorder && this.recorder.audioContext && this.recorder.audioContext.state !== 'closed') {
+          this.recorder.audioContext.close().catch(e => console.warn("Error closing recorder context:", e));
+          this.recorder.audioContext = null;
+        }
+        if (this.streamer && this.streamer.audioContext && this.streamer.audioContext.state !== 'closed') {
+          if (!this.recorder || this.streamer.audioContext !== this.recorder.audioContext) {
+            this.streamer.audioContext.close().catch(e => console.warn("Error closing streamer context:", e));
+          }
+          this.streamer.audioContext = null;
+        }
       });
   
       this.client.on("error", (error) => {
         console.error("WebSocket Error:", error);
-        // Status might be updated by 'close' event as well
         this._updateStatus(`Connection Error: ${error.message || error.type}`, true);
-        // No need to call stop() here, 'close' event handles cleanup
       });
   
       this.client.on("audio", (base64AudioData) => {
         if (this.streamer) {
           this.streamer.addPCM16Data(base64AudioData);
         }
-      });    this.client.on("content", (content) => {
-        // Handle text content from the model if needed
+      });
+  
+      this.client.on("content", (content) => {
         if (content.modelTurn && content.modelTurn.parts) {
           const textParts = content.modelTurn.parts.filter(p => p.text).map(p => p.text).join('');
           if(textParts) {
-              console.log("Received Text:", textParts);
-              // You could display this text somewhere in the UI
-              // this._updateStatus(`Received: ${textParts.substring(0, 50)}...`);
+            console.log("Received Text:", textParts);
           }
         }
       });
   
-      this.client.on("toolcall", (toolCall) => {
-          console.log("Received Tool Call:", toolCall);
-          this._updateStatus("Tool call received...");
+      // Hybrid approach for tool call handling
+      this.client.on("toolcall", async (toolCall) => {
+        console.log("Received Tool Call:", toolCall);
+        this._updateStatus("Tool call received...");
   
-          const showAlertCall = toolCall.functionCalls.find(fc => fc.name === this.showAlertTool.name);
+        try {
+          // Process all function calls in the toolCall
+          const responsePromises = toolCall.functionCalls.map(async (fc) => {
+            let response;
   
-          if (showAlertCall && showAlertCall.args && typeof showAlertCall.args.text === 'string') {
-              console.log("Show Alert Tool Call Args:", showAlertCall.args);
-              
+            // Priority 1: Use specific tool handler if available
+            if (this.toolHandlers[fc.name]) {
               try {
-                  // Display the alert with the text from the tool call
-                  alert(`Message from Assistant:\n\n${showAlertCall.args.text}`);
-                  
-                  const response = {
-                      functionResponses: [{
-                          id: showAlertCall.id,
-                          response: { output: { success: true, message: "Alert displayed client-side." } }
-                      }]
-                  };
-                  
-                  setTimeout(() => { // Add slight delay
-                      this.client.sendToolResponse(response.functionResponses);
-                      this._updateStatus("Sent alert tool response.");
-                  }, 200);
-              } catch (e) {
-                  console.error("Error displaying alert:", e);
-                  // Send an error response if alert fails
-                  const response = {
-                      functionResponses: [{
-                          id: showAlertCall.id,
-                          response: { output: { success: false, message: `Failed to display alert: ${e.message}` } }
-                      }]
-                  };
-                  
-                  setTimeout(() => {
-                      this.client.sendToolResponse(response.functionResponses);
-                      this._updateStatus("Sent error response for alert tool.");
-                  }, 200);
+                // Pass both function call and client to the handler
+                response = await this.toolHandlers[fc.name](fc, this.client);
+              } catch (error) {
+                console.error(`Error in handler for tool ${fc.name}:`, error);
+                response = {
+                  success: false,
+                  message: `Error in tool handler: ${error.message}`
+                };
               }
-          } else {
-              // Handle other potential tool calls or send generic responses if needed
-              const responses = toolCall.functionCalls.map(fc => ({
-                   id: fc.id,
-                   response: { output: { success: false, message: "Tool not implemented client-side." } }
-              }));
-               if(responses.length > 0) {
-                  setTimeout(() => {
-                      this.client.sendToolResponse(responses);
-                      this._updateStatus("Sent default tool response(s).");
-                  }, 200);
+            } 
+            // Priority 2: Use global handler if available
+            else if (this.globalToolHandler) {
+              try {
+                response = await this.globalToolHandler(fc, this.client, toolCall);
+              } catch (error) {
+                console.error("Error in global tool handler:", error);
+                response = {
+                  success: false,
+                  message: `Error in global tool handler: ${error.message}`
+                };
               }
+            } 
+            // Priority 3: Default "not implemented" response
+            else {
+              console.warn(`No handler found for tool: ${fc.name}`);
+              response = {
+                success: false,
+                message: "Tool not implemented client-side."
+              };
+            }
+  
+            return {
+              id: fc.id,
+              response: { output: response }
+            };
+          });
+  
+          // Wait for all responses to resolve
+          const responses = await Promise.all(responsePromises);
+          
+          // Send responses back to the API
+          if (responses.length > 0 && this.client && this.isConnected) {
+            setTimeout(() => {
+              if (this.client && this.isConnected) {
+                this.client.sendToolResponse(responses);
+                this._updateStatus("Sent tool response(s).");
+              }
+            }, 200);
           }
+        } catch (error) {
+          console.error("Error processing tool calls:", error);
+          this._updateStatus(`Error processing tool calls: ${error.message}`, true);
+        }
       });
   
-       this.client.on("interrupted", () => {
-          console.log("Model output interrupted (likely by user speech)");
-          if (this.streamer) this.streamer.stop(); // Stop playback immediately
-          this._updateStatus("Interrupted.");
-       });
+      this.client.on("interrupted", () => {
+        console.log("Model output interrupted (likely by user speech)");
+        if (this.streamer) this.streamer.stop();
+        this._updateStatus("Interrupted.");
+      });
   
-       this.client.on("turncomplete", () => {
-           console.log("Model turn complete.");         // Maybe update status briefly
-       });
-       this.client.on("setupcomplete", () => {         console.log("Setup complete acknowledged by server.");
-       });
+      this.client.on("turncomplete", () => {
+        console.log("Model turn complete.");
+      });
+      
+      this.client.on("setupcomplete", () => {
+        console.log("Setup complete acknowledged by server.");
+      });
     }
   
     _setupRecorderListeners() {
@@ -1067,41 +1095,74 @@ class EventEmitter {
           this.client.sendRealtimeInput([{ mimeType: "audio/pcm", data: base64AudioData }]);
         }
       });
+      
       this.recorder.on("volume", (volume) => {
         // Optional: Display input volume meter
-        // console.log("Input Volume:", volume.toFixed(3));
       });
+      
       this.recorder.on("error", (error) => {
-         console.error("Recorder Error:", error);
-         this._updateStatus(`Recorder Error: ${error.message}`, true);
-         // May need to attempt restart or stop completely
-         this.stop();
+        console.error("Recorder Error:", error);
+        this._updateStatus(`Recorder Error: ${error.message}`, true);
+        this.stop();
       });
     }
   
-     _setupStreamerListeners() {
+    _setupStreamerListeners() {
       this.streamer.on("volume", (volume) => {
-          // Optional: Display output volume meter
-          // console.log("Output Volume:", volume.toFixed(3));
+        // Optional: Display output volume meter
       });
+      
       this.streamer.on("ended", () => {
-          console.log("Audio playback finished.");
-          // Optional: Update status or UI
+        console.log("Audio playback finished.");
       });
-       this.streamer.on("error", (error) => { // Add error handling for streamer
-         console.error("Streamer Error:", error);
-         this._updateStatus(`Streamer Error: ${error.message}`, true);
-         // May need to stop playback
-         this.streamer.stop();
+      
+      this.streamer.on("error", (error) => {
+        console.error("Streamer Error:", error);
+        this._updateStatus(`Streamer Error: ${error.message}`, true);
+        this.streamer.stop();
       });
     }
-  
   }
   
+  // --- Define tools outside the controller ---
+  const showAlertTool = {
+    name: "show_alert",
+    description: "Displays a message in a browser alert box.",
+    parameters: {
+      type: "OBJECT", 
+      properties: {
+        text: {
+          type: "STRING",
+          description: "The text message to display in the alert.",
+        },
+      },
+      required: ["text"],
+    },
+  };
+  
+  // Define default handler for the alert tool
+  const showAlertHandler = async function(fc, client) {
+    console.log("Show Alert Tool Call Args:", fc.args);
+    
+    try {
+      // Display the alert with the text from the tool call
+      alert(`Message from Assistant:\n\n${fc.args.text}`);
+      return {
+        success: true, 
+        message: "Alert displayed client-side."
+      };
+    } catch (e) {
+      console.error("Error displaying alert:", e);
+      return {
+        success: false, 
+        message: `Failed to display alert: ${e.message}`
+      };
+    }
+  };
+  
 // --- Initialization ---
-// Wait for the DOM to be ready
 document.addEventListener("DOMContentLoaded", () => {
-    // Get your API key from local storage or prompt user (more secure than hardcoding)
+    // Get your API key from local storage or prompt user
     const storedApiKey = localStorage.getItem("geminiApiKey");
     const apiKeyInput = document.getElementById("apiKey");
     if (storedApiKey) {
@@ -1109,16 +1170,41 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Save API key when changed
-    apiKeyInput.addEventListener('change', (e) => {      localStorage.setItem("geminiApiKey", e.target.value);
+    apiKeyInput.addEventListener('change', (e) => {
+        localStorage.setItem("geminiApiKey", e.target.value);
     });
 
-
-    // Instantiate the controller
+    // Example usage with both individual handlers and a global handler
     window.liveApiClient = new LiveApiClientController(
         "apiKey",
         "startBtn",
         "stopBtn",
         "status",
+        {
+            // Define tools
+            tools: [showAlertTool],
+            
+            // Option 1: Individual handlers (per tool)
+            toolHandlers: {
+                "show_alert": showAlertHandler
+            },
+            
+            // Option 2: Global handler (for all tools)
+            // Uncomment to use this approach instead of or alongside individual handlers
+            /*
+            globalToolHandler: async (functionCall, client, toolCall) => {
+                if (functionCall.name === "show_alert") {
+                    return showAlertHandler(functionCall, client);
+                }
+                // Handle other tools as needed
+                return { success: false, message: "Tool not implemented in global handler" };
+            },
+            */
+            
+            // Customize system instruction
+            systemInstructionText: 'You are my helpful assistant.'
+        }
     );
-    console.log("Live API Client Controller initialized.");
+    
+    console.log("Live API Client Controller initialized with custom tools.");
 });
