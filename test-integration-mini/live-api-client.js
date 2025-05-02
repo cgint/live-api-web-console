@@ -32,6 +32,7 @@ class EventEmitter {
   const AUDIO_INPUT_SAMPLE_RATE = 16000;
   const AUDIO_OUTPUT_SAMPLE_RATE = 24000;
   const AUDIO_BUFFER_SIZE = 2048; // How often to send audio chunks
+  const USE_SCRIPT_PROCESSOR = true; // Force ScriptProcessor instead of AudioWorklet for compatibility
   
   // --- Helper Functions ---
   function arrayBufferToBase64(buffer) {
@@ -70,7 +71,8 @@ class EventEmitter {
     });
   }
   
-  function createWorketFromSrc(workletName, workletSrc) {  const script = new Blob(
+  function createWorketFromSrc(workletName, workletSrc) {
+    const script = new Blob(
       [`registerProcessor("${workletName}", ${workletSrc})`],
       { type: "application/javascript" },
     );
@@ -156,9 +158,13 @@ class EventEmitter {
       this.audioContext = null;
       this.source = null;
       this.recordingWorklet = null;
+      this.scriptProcessor = null; // Added for compatibility
       this.vuWorklet = null;
+      this.vuScriptProcessor = null; // Added for compatibility
       this._isStarting = false;
       this._startPromise = null;
+      this.buffer = new Int16Array(AUDIO_BUFFER_SIZE);
+      this.bufferWriteIndex = 0;
     }
   
     async start() {
@@ -181,44 +187,61 @@ class EventEmitter {
   
           this.source = this.audioContext.createMediaStreamSource(this.stream);
   
-          // Recording Worklet
-          const recordingWorkletName = "audio-recorder-worklet";
-          try {
-            await this.audioContext.audioWorklet.addModule(
-              createWorketFromSrc(recordingWorkletName, AudioRecordingWorkletSrc),
-            );
-          } catch (e) {
-            console.error("Error adding recording worklet module:", e);          throw e;
-          }
-          this.recordingWorklet = new AudioWorkletNode(
-            this.audioContext,
-            recordingWorkletName,
-          );
-          this.recordingWorklet.port.onmessage = (ev) => {
-            if (ev.data.data.int16arrayBuffer) {
-              const base64 = arrayBufferToBase64(ev.data.data.int16arrayBuffer);
-              this.emit("data", base64);
+          // Try AudioWorklet first, then fall back to ScriptProcessor for compatibility
+          if (!USE_SCRIPT_PROCESSOR && typeof AudioWorkletNode === 'function') {
+            try {
+              // Recording Worklet
+              const recordingWorkletName = "audio-recorder-worklet";
+              try {
+                const processorCode = `registerProcessor("${recordingWorkletName}", ${AudioRecordingWorkletSrc})`;
+                const blob = new Blob([processorCode], { type: "application/javascript" });
+                const url = URL.createObjectURL(blob);
+                await this.audioContext.audioWorklet.addModule(url);
+                URL.revokeObjectURL(url);
+                
+                this.recordingWorklet = new AudioWorkletNode(
+                  this.audioContext,
+                  recordingWorkletName,
+                );
+                this.recordingWorklet.port.onmessage = (ev) => {
+                  if (ev.data.data.int16arrayBuffer) {
+                    const base64 = arrayBufferToBase64(ev.data.data.int16arrayBuffer);
+                    this.emit("data", base64);
+                  }
+                };
+                this.source.connect(this.recordingWorklet);
+                this.recordingWorklet.connect(this.audioContext.destination);
+                console.log("Using AudioWorklet for recording");
+              } catch (e) {
+                console.error("Error adding recording worklet module:", e);
+                throw e; // Force fallback to ScriptProcessor
+              }
+              
+              // VU Meter Worklet
+              const vuWorkletName = "vu-meter-in";
+              try {
+                const processorCode = `registerProcessor("${vuWorkletName}", ${VolMeterWorketSrc})`;
+                const blob = new Blob([processorCode], { type: "application/javascript" });
+                const url = URL.createObjectURL(blob);
+                await this.audioContext.audioWorklet.addModule(url);
+                URL.revokeObjectURL(url);
+                
+                this.vuWorklet = new AudioWorkletNode(this.audioContext, vuWorkletName);
+                this.vuWorklet.port.onmessage = (ev) => this.emit("volume", ev.data.volume);
+                this.source.connect(this.vuWorklet);
+                this.vuWorklet.connect(this.audioContext.destination);
+              } catch (e) {
+                console.error("Error adding VU meter worklet module:", e);
+                // Don't throw, VU meter is optional
+              }
+            } catch (e) {
+              console.warn("AudioWorklet failed, falling back to ScriptProcessor:", e);
+              this.setupScriptProcessorFallback();
             }
-          };
-          this.source.connect(this.recordingWorklet);
-          this.recordingWorklet.connect(this.audioContext.destination); // Connect to output to keep graph alive
-  
-          // VU Meter Worklet
-          const vuWorkletName = "vu-meter-in";
-          try {
-            await this.audioContext.audioWorklet.addModule(
-              createWorketFromSrc(vuWorkletName, VolMeterWorketSrc),
-            );
-          } catch (e) {
-            console.error("Error adding VU meter worklet module:", e);
-            // Don't throw, VU meter is optional
+          } else {
+            console.log("Using ScriptProcessor fallback for compatibility");
+            this.setupScriptProcessorFallback();
           }
-          if (this.audioContext.audioWorklet) {
-              this.vuWorklet = new AudioWorkletNode(this.audioContext, vuWorkletName);
-              this.vuWorklet.port.onmessage = (ev) => this.emit("volume", ev.data.volume);            this.source.connect(this.vuWorklet);
-              this.vuWorklet.connect(this.audioContext.destination); // Keep alive
-          }
-  
   
           this._isStarting = false;
           console.log("AudioRecorder started");
@@ -231,6 +254,54 @@ class EventEmitter {
         }
       });
       return this._startPromise;
+    }
+  
+    // Add a ScriptProcessor fallback method
+    setupScriptProcessorFallback() {
+      // Use ScriptProcessor for recording (older API but more compatible)
+      const bufferSize = 4096;
+      this.scriptProcessor = this.audioContext.createScriptProcessor(
+        bufferSize,
+        1, // input channels
+        1  // output channels
+      );
+      
+      this.scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+        const inputBuffer = audioProcessingEvent.inputBuffer;
+        const inputData = inputBuffer.getChannelData(0);
+        
+        // Convert float32 to int16 and fill buffer
+        for (let i = 0; i < inputData.length; i++) {
+          const int16Value = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+          this.buffer[this.bufferWriteIndex++] = int16Value;
+          
+          if (this.bufferWriteIndex >= this.buffer.length) {
+            // Send the filled buffer
+            const base64 = arrayBufferToBase64(this.buffer.slice(0, this.bufferWriteIndex).buffer);
+            this.emit("data", base64);
+            this.bufferWriteIndex = 0;
+          }
+        }
+      };
+      
+      // Create a simple VU meter
+      this.vuScriptProcessor = this.audioContext.createScriptProcessor(2048, 1, 1);
+      this.vuScriptProcessor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        let sum = 0;
+        for (let i = 0; i < input.length; i++) {
+          sum += input[i] * input[i];
+        }
+        const rms = Math.sqrt(sum / input.length);
+        this.emit("volume", rms);
+      };
+      
+      // Connect the graph
+      this.source.connect(this.scriptProcessor);
+      this.scriptProcessor.connect(this.audioContext.destination);
+      
+      this.source.connect(this.vuScriptProcessor);
+      this.vuScriptProcessor.connect(this.audioContext.destination);
     }
   
     stop() {
@@ -250,15 +321,21 @@ class EventEmitter {
         this.recordingWorklet.disconnect();
         this.recordingWorklet = null;
       }
-       if (this.vuWorklet) {
+      if (this.scriptProcessor) {
+        this.scriptProcessor.disconnect();
+        this.scriptProcessor = null;
+      }
+      if (this.vuWorklet) {
         this.vuWorklet.disconnect();
         this.vuWorklet = null;
       }
+      if (this.vuScriptProcessor) {
+        this.vuScriptProcessor.disconnect();
+        this.vuScriptProcessor = null;
+      }
+      // Reset buffer state
+      this.bufferWriteIndex = 0;
       // Don't close context immediately, might be needed by streamer
-      // if (this.audioContext && this.audioContext.state !== 'closed') {
-      //     this.audioContext.close();
-      //     this.audioContext = null;
-      // }
       console.log("AudioRecorder stopped");
       this._startPromise = null; // Reset start promise
       this._isStarting = false;
@@ -280,6 +357,7 @@ class EventEmitter {
       this.initialBufferTime = 0.1; // 100ms initial buffer before playback
       this.endOfQueueAudioSource = null;
       this.vuWorklet = null;
+      this.vuScriptProcessor = null; // Added for compatibility
     }
   
     async init() {
@@ -291,21 +369,54 @@ class EventEmitter {
         this.gainNode = this.audioContext.createGain();
         this.gainNode.connect(this.audioContext.destination);
   
-        // VU Meter Worklet (Output)
+        // Try AudioWorklet for VU meter, fall back to ScriptProcessor
+        if (!USE_SCRIPT_PROCESSOR && typeof AudioWorkletNode === 'function') {
+          // VU Meter Worklet (Output)
           const vuWorkletName = "vu-meter-out";
           try {
-            await this.audioContext.audioWorklet.addModule(
-              createWorketFromSrc(vuWorkletName, VolMeterWorketSrc),
-            );           this.vuWorklet = new AudioWorkletNode(this.audioContext, vuWorkletName);
-             this.vuWorklet.port.onmessage = (ev) => this.emit("volume", ev.data.volume);
-             this.gainNode.connect(this.vuWorklet); // Connect gain to VU meter
-             this.vuWorklet.connect(this.audioContext.destination); // Connect VU meter to output
+            const processorCode = `registerProcessor("${vuWorkletName}", ${VolMeterWorketSrc})`;
+            const blob = new Blob([processorCode], { type: "application/javascript" });
+            const url = URL.createObjectURL(blob);
+            await this.audioContext.audioWorklet.addModule(url);
+            URL.revokeObjectURL(url);
+            
+            this.vuWorklet = new AudioWorkletNode(this.audioContext, vuWorkletName);
+            this.vuWorklet.port.onmessage = (ev) => this.emit("volume", ev.data.volume);
+            this.gainNode.connect(this.vuWorklet);
+            this.vuWorklet.connect(this.audioContext.destination);
+            console.log("Using AudioWorklet for VU meter");
           } catch (e) {
             console.error("Error adding Output VU meter worklet module:", e);
-             this.gainNode.connect(this.audioContext.destination); // Connect gain directly if VU fails
-          }      console.log("AudioStreamer initialized and context resumed");
+            this.setupVuMeterScriptProcessor();
+          }
+        } else {
+          console.log("Using ScriptProcessor for VU meter (compatibility mode)");
+          this.setupVuMeterScriptProcessor();
+        }
       } else {
           this.gainNode.connect(this.audioContext.destination); // Ensure connection
+      }
+    }
+  
+    // Add ScriptProcessor fallback for VU meter
+    setupVuMeterScriptProcessor() {
+      // Simple VU meter using ScriptProcessor
+      try {
+        this.vuScriptProcessor = this.audioContext.createScriptProcessor(2048, 1, 1);
+        this.vuScriptProcessor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          let sum = 0;
+          for (let i = 0; i < input.length; i++) {
+            sum += input[i] * input[i];
+          }
+          const rms = Math.sqrt(sum / input.length);
+          this.emit("volume", rms);
+        };
+        this.gainNode.connect(this.vuScriptProcessor);
+        this.vuScriptProcessor.connect(this.audioContext.destination);
+      } catch (e) {
+        console.error("Error creating ScriptProcessor VU meter:", e);
+        this.gainNode.connect(this.audioContext.destination); // Direct connection
       }
     }
   
@@ -423,21 +534,29 @@ class EventEmitter {
           this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, this.audioContext.currentTime);
           this.gainNode.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.1);
        }
-       // Don't disconnect immediately, allow fade out
-       // Consider closing context elsewhere if recorder/streamer share it
-      console.log("AudioStreamer stopped");
+       // Additional cleanup for ScriptProcessor
+       if (this.vuScriptProcessor) {
+         this.vuScriptProcessor.disconnect();
+         this.vuScriptProcessor = null;
+       }
+       console.log("AudioStreamer stopped");
     }
   }
   
   // --- Live API Client ---
   class MultimodalLiveClient extends EventEmitter {
-    constructor(apiKey) {    super();
+    constructor(apiKey) {
+      super();
       if (!apiKey) {
         throw new Error("API Key is required for MultimodalLiveClient");
       }
       this.apiKey = apiKey;
       this.ws = null;
       this.config = null;
+      this.connectionAttempt = 0;
+      this.maxConnectionAttempts = 3;
+      this.isConnecting = false;
+      this.pendingAudioChunks = []; // Store audio chunks if connection isn't ready
     }
   
     log(type, message) {
@@ -454,55 +573,105 @@ class EventEmitter {
     async connect(config) {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         console.warn("WebSocket already open. Disconnect first.");
-        return;
+        return Promise.resolve(true);
       }
+      
+      if (this.isConnecting) {
+        console.log("Connection already in progress, waiting...");
+        return new Promise((resolve, reject) => {
+          const checkInterval = setInterval(() => {
+            if (!this.isConnecting) {
+              clearInterval(checkInterval);
+              if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                resolve(true);
+              } else {
+                reject(new Error("Connection attempt failed while waiting"));
+              }
+            }
+          }, 100);
+        });
+      }
+      
       if (!config || !config.model) {
-          throw new Error("Invalid config provided. 'model' is required.");
+        throw new Error("Invalid config provided. 'model' is required.");
       }
-  
+
       this.config = config;
       const targetUrl = `${GOOGLE_LIVE_API_BASE_URL}?key=${this.apiKey}`;
       this.log("client.connect", `Attempting to connect to ${targetUrl.split("?")[0]}...`);
-  
+      this.isConnecting = true;
+      this.connectionAttempt++;
+
       return new Promise((resolve, reject) => {
         try {
           this.ws = new WebSocket(targetUrl);
         } catch (e) {
           this.log("client.error", `WebSocket creation failed: ${e.message}`);
+          this.isConnecting = false;
           reject(e);
           return;
-        }      const onOpen = (event) => {
+        }
+
+        // Set timeout for initial connection
+        const connectionTimeout = setTimeout(() => {
+          if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
+            this.log("client.error", "WebSocket connection timeout");
+            this.ws.close(1000, "Connection timeout");
+            this.isConnecting = false;
+            reject(new Error("Connection timeout"));
+          }
+        }, 15000); // 15 second timeout
+
+        const onOpen = (event) => {
+          clearTimeout(connectionTimeout);
           this.log("client.open", "WebSocket connection established.");
-          this.ws.removeEventListener("error", onError); // Remove temporary error handler
-  
-          // Send setup message        const setupMessage = { setup: this.config };
+          this.ws.removeEventListener("error", onError);
+
+          // Send setup message
+          const setupMessage = { setup: this.config };
           this._sendDirect(setupMessage);
           this.log("client.send->google", setupMessage);
-  
+
           this.ws.addEventListener("message", this.handleMessage.bind(this));
-          this.ws.addEventListener("close", this.handleClose.bind(this));        this.ws.addEventListener("error", this.handleError.bind(this)); // Add persistent error handler
-  
+          this.ws.addEventListener("close", this.handleClose.bind(this));
+          this.ws.addEventListener("error", this.handleError.bind(this));
+
+          this.isConnecting = false;
+          this.connectionAttempt = 0; // Reset counter on success
           this.emit("open");
+          
+          // Process any pending audio chunks
+          if (this.pendingAudioChunks.length > 0) {
+            console.log(`Processing ${this.pendingAudioChunks.length} pending audio chunks`);
+            this.sendRealtimeInput(this.pendingAudioChunks);
+            this.pendingAudioChunks = [];
+          }
+          
           resolve(true);
         };
-  
-        const onError = (event) => {        const errorMsg = `WebSocket connection error to Google API. Check API Key and network.`;
+
+        const onError = (event) => {
+          clearTimeout(connectionTimeout);
+          const errorMsg = `WebSocket connection error to Google API. Check API Key and network.`;
           this.log("client.error", errorMsg);
-          this.ws = null; // Ensure ws is null on connection failure
+          this.ws = null;
+          this.isConnecting = false;
           this.emit("error", { message: errorMsg, event });
           reject(new Error(errorMsg));
         };
-  
+
         const onClose = (event) => {
-            // This listener is primarily for the initial connection phase failure
-            this.log("client.close", `WebSocket closed prematurely during connection. Code: ${event.code}, Reason: ${event.reason}`);
-            this.ws = null;
-            reject(new Error(`WebSocket connection failed. Code: ${event.code}`));
+          clearTimeout(connectionTimeout);
+          // This listener is primarily for the initial connection phase failure
+          this.log("client.close", `WebSocket closed prematurely during connection. Code: ${event.code}, Reason: ${event.reason}`);
+          this.ws = null;
+          this.isConnecting = false;
+          reject(new Error(`WebSocket connection failed. Code: ${event.code}`));
         };
-  
+
         this.ws.addEventListener("open", onOpen, { once: true });
         this.ws.addEventListener("error", onError, { once: true });
-        this.ws.addEventListener("close", onClose, { once: true }); // Handle unexpected close during connect
+        this.ws.addEventListener("close", onClose, { once: true });
       });
     }
   
@@ -574,8 +743,22 @@ class EventEmitter {
         "client.close",
         `WebSocket closed. Code: ${event.code}, Reason: "${event.reason}", Clean: ${event.wasClean}`,
       );
-      this.ws = null; // Ensure ws is null
+      this.ws = null;
+      
+      // Emit close event
       this.emit("close", event);
+      
+      // Attempt reconnect for specific non-terminal close codes
+      if (event.code === 1006 || event.code === 1001) {
+        if (this.connectionAttempt < this.maxConnectionAttempts) {
+          this.log("client.reconnect", `Attempting to reconnect (${this.connectionAttempt + 1}/${this.maxConnectionAttempts})...`);
+          setTimeout(() => {
+            this.connect(this.config).catch(err => {
+              this.log("client.reconnect.error", `Reconnection failed: ${err.message}`);
+            });
+          }, 1000); // Wait 1 second before reconnecting
+        }
+      }
     };
   
     handleError = (event) => {
@@ -600,6 +783,18 @@ class EventEmitter {
   
     // --- Public Send Methods ---
     sendRealtimeInput(mediaChunks) {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        // Store chunks if not connected yet but connecting
+        if (this.isConnecting) {
+          this.pendingAudioChunks = this.pendingAudioChunks.concat(mediaChunks);
+          this.log("client.queue", `Queued ${mediaChunks.length} audio chunk(s) while connecting`);
+          return;
+        }
+        
+        this.log("client.error", "WebSocket not open. Cannot send audio chunks.");
+        return;
+      }
+      
       const message = { realtimeInput: { mediaChunks } };
       this._sendDirect(message);
       this.log("client.send->google", { type: "realtimeInput", chunks: mediaChunks.length });
@@ -654,7 +849,7 @@ class EventEmitter {
       };
   
       this.config = {
-          model: "models/gemini-1.5-flash-latest", // Or "models/gemini-1.5-pro-latest" etc.
+          model: "models/gemini-2.0-flash-live-001", // Updated to latest model version
           generationConfig: {
               responseModalities: "audio", // Request audio output
               speechConfig: {
@@ -706,19 +901,20 @@ class EventEmitter {
         await this.streamer.init(); // Initialize and resume context
         this._setupStreamerListeners();
   
-        // 3. Initialize Audio Recorder (for input)
+        // 3. Request microphone access BEFORE creating WebSocket connection
+        this._updateStatus("Requesting microphone access...");
         this.recorder = new AudioRecorder();
         this._setupRecorderListeners();
-        // Start recorder *after* successful connection attempt
-  
-        // 4. Connect WebSocket
-        await this.client.connect(this.config);
-        // Connection successful listener (onOpen) will handle state update
-  
-        // 5. Start recorder *now* after successful connection
+        
+        // Start recorder first to get mic permissions
         await this.recorder.start();
         this.isStreaming = true;
-  
+        
+        // 4. Then connect WebSocket AFTER mic permission is granted
+        this._updateStatus("Connecting to API...");
+        await this.client.connect(this.config);
+        this._updateStatus("Connected and streaming.");
+        this._updateControls();
   
       } catch (error) {      this._updateStatus(`Failed to start: ${error.message}`, true);
         this.stop(); // Ensure cleanup on failure
@@ -865,7 +1061,8 @@ class EventEmitter {
      _setupStreamerListeners() {
       this.streamer.on("volume", (volume) => {
           // Optional: Display output volume meter
-          // console.log("Output Volume:", volume.toFixed(3));    });
+          // console.log("Output Volume:", volume.toFixed(3));
+      });
       this.streamer.on("ended", () => {
           console.log("Audio playback finished.");
           // Optional: Update status or UI
@@ -880,27 +1077,27 @@ class EventEmitter {
   
   }
   
-  // --- Initialization ---
-  // Wait for the DOM to be ready
-  document.addEventListener("DOMContentLoaded", () => {
+// --- Initialization ---
+// Wait for the DOM to be ready
+document.addEventListener("DOMContentLoaded", () => {
     // Get your API key from local storage or prompt user (more secure than hardcoding)
     const storedApiKey = localStorage.getItem("geminiApiKey");
     const apiKeyInput = document.getElementById("apiKey");
     if (storedApiKey) {
         apiKeyInput.value = storedApiKey;
     }
-  
+
     // Save API key when changed
     apiKeyInput.addEventListener('change', (e) => {      localStorage.setItem("geminiApiKey", e.target.value);
     });
-  
-  
+
+
     // Instantiate the controller
     window.liveApiClient = new LiveApiClientController(
-      "apiKey",
-      "startBtn",
-      "stopBtn",
-      "status",
+        "apiKey",
+        "startBtn",
+        "stopBtn",
+        "status",
     );
     console.log("Live API Client Controller initialized.");
 });
