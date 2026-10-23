@@ -73,8 +73,8 @@ export function useLiveAPI({ proxyUrl }: UseLiveAPIProps): UseLiveAPIResults {
   const sessionHandle = useRef<string | null>(null);
 
   // Function refs to avoid circular dependencies in useEffect
-  const connectFnRef = useRef<() => Promise<void>>();
-  const disconnectFnRef = useRef<() => Promise<void>>();
+  const connectFnRef = useRef<(() => Promise<void>) | null>(null);
+  const disconnectFnRef = useRef<(() => Promise<void>) | null>(null);
 
   // Exponential backoff for reconnection
   const getReconnectDelay = useCallback(() => {

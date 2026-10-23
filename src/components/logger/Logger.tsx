@@ -18,7 +18,7 @@ import "./logger.scss";
 
 import { Part } from "@google/generative-ai";
 import cn from "classnames";
-import { ReactNode } from "react";
+import { ReactElement, ReactNode } from "react";
 import { useLoggerStore } from "../../lib/store-logger";
 import SyntaxHighlighter from "react-syntax-highlighter";
 import { vs2015 as dark } from "react-syntax-highlighter/dist/esm/styles/hljs";
@@ -52,7 +52,7 @@ const LogEntry = ({
   }: {
     message: StreamingLog["message"];
   }) => ReactNode;
-}): JSX.Element => (
+}): ReactElement => (
   <li
     className={cn(
       `plain-log`,
@@ -155,7 +155,7 @@ const ToolCallLog = ({ message }: Message) => {
   );
 };
 
-const ToolCallCancellationLog = ({ message }: Message): JSX.Element => (
+const ToolCallCancellationLog = ({ message }: Message): ReactElement => (
   <div className={cn("rich-log tool-call-cancellation")}>
     <span>
       {" "}
@@ -171,7 +171,7 @@ const ToolCallCancellationLog = ({ message }: Message): JSX.Element => (
   </div>
 );
 
-const ToolResponseLog = ({ message }: Message): JSX.Element => (
+const ToolResponseLog = ({ message }: Message): ReactElement => (
   <div className={cn("rich-log tool-response")}>
     {(message as ToolResponseMessage).toolResponse.functionResponses.map(
       (fc) => (
@@ -186,7 +186,7 @@ const ToolResponseLog = ({ message }: Message): JSX.Element => (
   </div>
 );
 
-const ModelTurnLog = ({ message }: Message): JSX.Element => {
+const ModelTurnLog = ({ message }: Message): ReactElement => {
   const serverContent = (message as ServerContentMessage).serverContent;
   const { modelTurn } = serverContent as ModelTurn;
   const { parts } = modelTurn;

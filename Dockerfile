@@ -1,5 +1,5 @@
 # Stage 1: Build the React application
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 # Set the working directory
 WORKDIR /app
@@ -21,7 +21,7 @@ COPY src/ ./src/
 RUN npm run build
 
 # Stage 2: Serve the application using a lightweight Node.js server
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 

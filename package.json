@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "dependencies": {
     "classnames": "^2.5.1",
-    "dotenv": "^16.4.4",
+    "dotenv": "^18.0.9",
     "dotenv-flow": "^4.1.0",
     "eventemitter3": "^5.0.1",
     "lodash": "^4.17.21",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "react-icons": "^5.3.0",
     "react-scripts": "5.0.1",
     "react-select": "^5.8.3",
@@ -49,21 +49,21 @@
     ]
   },
   "devDependencies": {
-    "@google/generative-ai": "^0.21.0",
-    "@testing-library/jest-dom": "^5.17.0",
-    "@testing-library/react": "^13.4.0",
-    "@testing-library/user-event": "^13.5.0",
-    "@types/jest": "^27.5.2",
+    "@google/generative-ai": "^0.24.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
+    "@types/jest": "^30.0.0",
     "@types/lodash": "^4.17.13",
-    "@types/node": "^16.18.119",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@types/react-syntax-highlighter": "^15.5.13",
-    "concurrently": "^8.2.2",
+    "concurrently": "^10.0.6",
     "ts-node": "^10.9.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.9.3"
   },
   "overrides": {
-    "typescript": "^5.6.3"
+    "typescript": "^5.9.3"
   }
 }
