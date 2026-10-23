@@ -39,6 +39,7 @@ ENV PORT=$PORT
 EXPOSE $PORT
 
 # Command to run the server
-# -s flag handles single-page application routing
+# No -s flag: the app is single-view with no client-side routes,
+# so serve returns 404 for unknown paths instead of the SPA shell.
 # -l specifies the port to listen on
-CMD ["sh", "-c", "serve -s build -l ${PORT}"]
+CMD ["sh", "-c", "serve build -l ${PORT}"]
